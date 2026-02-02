@@ -1,0 +1,21 @@
+# Cloudflare Tunnel 設定
+# Design原則: 71. 慣用的に - 標準的な設定パターン
+
+tunnel: ${CLOUDFLARED_TUNNEL_ID}
+credentials-file: /root/.cloudflared/${CLOUDFLARED_TUNNEL_ID}.json
+
+ingress:
+  # Web UI + API
+  - hostname: talkdub.lab
+    service: http://web:8000
+    originRequest:
+      connectTimeout: 30s
+      noTLSVerify: false
+  
+  # Health check
+  - hostname: talkdub.lab
+    path: /health
+    service: http://web:8000
+  
+  # Catch-all
+  - service: http_status:404
