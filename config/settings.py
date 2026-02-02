@@ -1,19 +1,10 @@
 """
-設定管理 v0.1.2 - タイムアウト設定追加
+設定管理 v0.1.4 - Groq API詳細設定追加
 """
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Literal
-
-class Settings(BaseSettings):
-    # ... (既存設定は省略) ...
-    
-
-    
-    # ... (以下既存) ...
-
-settings = Settings()
 
 class Settings(BaseSettings):
     # プロジェクト
@@ -113,18 +104,45 @@ class Settings(BaseSettings):
     ALERT_DISK_THRESHOLD_GB: float = 50.0
     ALERT_FAILURE_RATE_THRESHOLD: float = 0.3  # 30%
 
-    # Groq API設定
+    # Groq API詳細設定
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     GROQ_MAX_RETRIES: int = 5
     GROQ_TIMEOUT_SEC: int = 30
+    GROQ_RATE_LIMIT_RPM: int = 60  # Requests per minute
+    GROQ_RATE_LIMIT_BUFFER: float = 0.9  # 90%までに抑える（安全マージン）
 
-    # 翻訳チャンク設定
-    CHUNK_CHAR_LIMIT_SRC: int = 2500  # 1チャンクあたり最大文字数
-    CHUNK_SEG_LIMIT: int = 40  # 1チャンクあたり最大セグメント数
-    MAX_RETRIES: int = 5
-    BACKOFF_BASE_SEC: float = 2.0
+    # 翻訳プロンプト設定
+    TRANSLATION_TEMPERATURE: float = 0.3  # 一貫性重視
+    TRANSLATION_MAX_TOKENS: int = 4096
+    TRANSLATION_SYSTEM_PROMPT_TEMPLATE: str = """You are a professional translator specialized in video subtitle translation.
+Translate the following segments from {src_lang} to {tgt_lang}.
 
+IMPORTANT RULES:
+1. Preserve the meaning and tone (formal/casual) of the original text
+2. Keep translations natural and concise for spoken dialogue
+3. Maintain consistency in terminology throughout
+4. DO NOT add explanations, notes, or extra content
+5. If a segment is a sound effect (like [laugh], [music]), keep it as-is or translate appropriately
+{context_instruction}"""
+
+    # 翻訳品質チェック閾値
+    TRANSLATION_MIN_LENGTH_RATIO: float = 0.1  # 元の10%未満は異常
+    TRANSLATION_MAX_LENGTH_RATIO: float = 5.0  # 元の5倍超は異常
+    TRANSLATION_SUSPICIOUS_PATTERNS: list[str] = [
+        r'\\[.*?\\]',  # 未翻訳の記号（[laugh]等）が残っている
+        r'[\u4e00-\u9fff]',  # 日本語→英語翻訳で漢字が残る
+        r'[\u3040-\u309f\u30a0-\u30ff]',  # 日本語→英語翻訳でひらがな・カタカナが残る
+    ]
+
+    # チャンク分割設定
+    CHUNK_CHAR_LIMIT_SRC: int = 2000  # 2500→2000に削減（安全マージン）
+    CHUNK_SEG_LIMIT: int = 30  # 40→30に削減
+    CHUNK_OVERLAP_SEGS: int = 2  # 前後のコンテキスト保持用オーバーラップ
+
+    # 翻訳キャッシュ設定
+    TRANSLATION_CACHE_ENABLED: bool = True
+    TRANSLATION_CACHE_TTL_HOURS: int = 72  # 72時間キャッシュ保持
     
     class Config:
         env_file = ".env"
