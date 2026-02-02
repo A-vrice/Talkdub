@@ -135,3 +135,11 @@ PHASE_DEPENDENCIES[PhaseID.TRANSLATION] = PhaseDependency(
     required_env_vars=["GROQ_API_KEY"],
     estimated_duration_min=20.0  # APIコール主体なので比較的速い
 )
+# TTS Phase追加
+PHASE_DEPENDENCIES[PhaseID.TTS] = PhaseDependency(
+    phase_id=PhaseID.TTS,
+    required_files=["pre_voice.wav"],  # タイミング測定用
+    required_job_fields=["segments", "speakers", "languages.tgt_lang"],
+    required_env_vars=["HF_TOKEN"],  # Qwen3-TTSモデルダウンロード用
+    estimated_duration_min=180.0  # 3時間（CPU処理、100セグメント想定）
+)
