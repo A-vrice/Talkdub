@@ -1,11 +1,19 @@
 """
-設定管理 v0.1.1 - リファクタ版
-Design原則: 42. よいデフォルト
+設定管理 v0.1.2 - タイムアウト設定追加
 """
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Literal
+
+class Settings(BaseSettings):
+    # ... (既存設定は省略) ...
+    
+
+    
+    # ... (以下既存) ...
+
+settings = Settings()
 
 class Settings(BaseSettings):
     # プロジェクト
@@ -58,6 +66,20 @@ class Settings(BaseSettings):
         "ru": "Русский",
         "ko": "한국어"
     }
+
+    # Pipeline Timeouts (秒)
+    TIMEOUT_DOWNLOAD: int = 1800  # 30分
+    TIMEOUT_NORMALIZE: int = 3600  # 1時間
+    TIMEOUT_SEPARATE: int = 7200  # 2時間 (Demucs重い)
+    TIMEOUT_WHISPERX: int = 10800  # 3時間
+    TIMEOUT_VAD: int = 1800
+    TIMEOUT_TTS_PER_SEGMENT: int = 300  # 5分/セグメント
+    TIMEOUT_FFMPEG_BASIC: int = 300
+    TIMEOUT_FFMPEG_COMPLEX: int = 3600
+    
+    # Phase Retry Settings
+    PHASE_MAX_RETRIES: int = 3
+    PHASE_RETRY_DELAY_SEC: float = 5.0
     
     # パイプラインパラメータ（v0.1固定値）
     ATEMPO_MAX: float = 1.3
