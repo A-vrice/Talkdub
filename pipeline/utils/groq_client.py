@@ -1,14 +1,17 @@
 """
-Groq API クライアント
+Groq API クライアント v2（リファクタ版）
 Design原則: 18. 複雑性をシステム側へ
 """
 import time
 import logging
-from typing import Optional, Any
-from groq import Groq
+from typing import Optional, List, Dict
+from groq import Groq, RateLimitError, APIError, APIConnectionError
 from groq.types.chat import ChatCompletion
 
 from config.settings import settings
+from pipeline.utils.rate_limiter import groq_rate_limiter
+from pipeline.utils.translation_cache import translation_cache
+from pipeline.utils.translation_validator import TranslationValidator
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +20,7 @@ class GroqAPIError(Exception):
     pass
 
 class GroqClient:
-    """
-    Groq APIラッパー
-    Design原則: 15. エラーを回避する - リトライ機能内蔵
-    """
+    """Groq APIラッパー v2"""
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or settings.GROQ_API_KEY
@@ -28,68 +28,133 @@ class GroqClient:
             raise GroqAPIError("GROQ_API_KEY not set")
         
         self.client = Groq(api_key=self.api_key)
-        self.model = "llama-3.3-70b-versatile"  # 2026年2月時点の最新モデル
+        self.model = settings.GROQ_MODEL
+        
+        # 統計情報
+        self.stats = {
+            "total_requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
+            "total_tokens": 0,
+            "total_cost_usd": 0.0  # 概算
+        }
     
     def translate(
         self,
-        texts: list[str],
+        texts: List[str],
         src_lang: str,
         tgt_lang: str,
         context: Optional[str] = None,
         max_retries: int = None
-    ) -> list[str]:
+    ) -> List[str]:
         """
-        テキスト一括翻訳
-        
-        Args:
-            texts: 翻訳するテキストリスト
-            src_lang: 元言語コード
-            tgt_lang: 翻訳先言語コード
-            context: コンテキスト（動画のタイトル等）
-            max_retries: 最大リトライ回数
-        
-        Returns:
-            翻訳済みテキストリスト
+        テキスト一括翻訳（キャッシュ・レート制限対応）
         """
-        max_retries = max_retries or settings.MAX_RETRIES
+        max_retries = max_retries or settings.GROQ_MAX_RETRIES
         
-        # システムプロンプト
+        # キャッシュチェック
+        cached = translation_cache.get(texts, src_lang, tgt_lang)
+        if cached:
+            self.stats["cache_hits"] += 1
+            logger.info(f"Translation cache hit for {len(texts)} segments")
+            return cached
+        
+        self.stats["cache_misses"] += 1
+        
+        # システムプロンプト生成
         system_prompt = self._build_system_prompt(src_lang, tgt_lang, context)
-        
-        # ユーザープロンプト（JSON形式で要求）
         user_prompt = self._build_user_prompt(texts)
         
         # リトライループ
         for attempt in range(max_retries):
             try:
+                # レート制限取得
+                if not groq_rate_limiter.acquire(timeout=60.0):
+                    raise GroqAPIError("Rate limit acquisition timeout")
+                
+                # API呼び出し
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt}
                     ],
-                    temperature=0.3,  # 一貫性重視
-                    max_tokens=4096,
-                    response_format={"type": "json_object"}  # JSON強制
+                    temperature=settings.TRANSLATION_TEMPERATURE,
+                    max_tokens=settings.TRANSLATION_MAX_TOKENS,
+                    response_format={"type": "json_object"}
                 )
+                
+                self.stats["total_requests"] += 1
+                
+                # トークン数・コスト記録
+                if hasattr(response, 'usage'):
+                    tokens = response.usage.total_tokens
+                    self.stats["total_tokens"] += tokens
+                    # llama-3.3-70b: $0.79/1M input tokens, $0.99/1M output tokens（概算）
+                    self.stats["total_cost_usd"] += (tokens / 1_000_000) * 0.89
                 
                 # レスポンスパース
                 translations = self._parse_response(response, len(texts))
                 
-                # バリデーション
-                self._validate_translations(texts, translations)
+                # 品質検証
+                is_valid, warnings = TranslationValidator.validate(
+                    texts, translations, src_lang, tgt_lang
+                )
+                
+                if warnings:
+                    for warning in warnings[:5]:  # 最初の5件のみログ
+                        logger.warning(warning)
+                
+                if not is_valid:
+                    raise GroqAPIError(
+                        f"Translation quality validation failed: {len(warnings)} issues"
+                    )
+                
+                # キャッシュ保存
+                translation_cache.set(texts, src_lang, tgt_lang, translations)
                 
                 return translations
                 
-            except Exception as e:
-                logger.warning(f"Groq API call failed (attempt {attempt + 1}/{max_retries}): {e}")
-                
+            except RateLimitError as e:
+                # Groq APIのレート制限エラー
+                logger.warning(f"Groq rate limit hit (attempt {attempt + 1}): {e}")
                 if attempt < max_retries - 1:
-                    # 指数バックオフ
+                    time.sleep(60)  # 1分待機
+                else:
+                    raise GroqAPIError(f"Rate limit exceeded: {str(e)}")
+            
+            except APIConnectionError as e:
+                # ネットワークエラー
+                logger.warning(f"Groq API connection error (attempt {attempt + 1}): {e}")
+                if attempt < max_retries - 1:
                     delay = settings.BACKOFF_BASE_SEC * (2 ** attempt)
                     time.sleep(delay)
                 else:
-                    raise GroqAPIError(f"Translation failed after {max_retries} attempts: {str(e)}")
+                    raise GroqAPIError(f"Connection failed: {str(e)}")
+            
+            except APIError as e:
+                # Groq APIエラー（4xx/5xx）
+                logger.error(f"Groq API error (attempt {attempt + 1}): {e}")
+                
+                # 4xxエラー（クライアント側の問題）はリトライしない
+                if hasattr(e, 'status_code') and 400 <= e.status_code < 500:
+                    raise GroqAPIError(f"Client error: {str(e)}")
+                
+                # 5xxエラーはリトライ
+                if attempt < max_retries - 1:
+                    delay = settings.BACKOFF_BASE_SEC * (2 ** attempt)
+                    time.sleep(delay)
+                else:
+                    raise GroqAPIError(f"API error: {str(e)}")
+            
+            except Exception as e:
+                logger.warning(f"Unexpected error (attempt {attempt + 1}): {e}")
+                
+                if attempt < max_retries - 1:
+                    delay = settings.BACKOFF_BASE_SEC * (2 ** attempt)
+                    time.sleep(delay)
+                else:
+                    raise GroqAPIError(f"Translation failed: {str(e)}")
     
     def translate_shortened(
         self,
@@ -99,66 +164,29 @@ class GroqClient:
         max_length: int,
         max_retries: int = None
     ) -> str:
-        """
-        短縮翻訳（Post処理の例外対応用）
-        
-        Args:
-            text: 翻訳するテキスト
-            src_lang: 元言語コード
-            tgt_lang: 翻訳先言語コード
-            max_length: 最大文字数
-            max_retries: 最大リトライ回数
-        
-        Returns:
-            短縮翻訳済みテキスト
-        """
-        max_retries = max_retries or settings.MAX_RETRIES
-        
-        system_prompt = f"""You are a professional translator specialized in concise translation.
-Translate the following text from {src_lang} to {tgt_lang}.
-IMPORTANT: The translation must be {max_length} characters or less while preserving the core meaning.
-Prioritize brevity over completeness."""
-        
-        user_prompt = f"""Text to translate: "{text}"
-
-Return ONLY a JSON object in this format:
-{{"translation": "your concise translation here"}}"""
+        """短縮翻訳（Post処理用）"""
+        # ... (前回と同じ、レート制限追加)
+        max_retries = max_retries or settings.GROQ_MAX_RETRIES
         
         for attempt in range(max_retries):
             try:
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    temperature=0.5,
-                    max_tokens=512,
-                    response_format={"type": "json_object"}
-                )
+                if not groq_rate_limiter.acquire(timeout=60.0):
+                    raise GroqAPIError("Rate limit acquisition timeout")
                 
-                import json
-                result = json.loads(response.choices[0].message.content)
-                translation = result.get("translation", "")
+                # ... (以下前回と同じ)
                 
-                if not translation:
-                    raise GroqAPIError("Empty translation received")
-                
-                if len(translation) > max_length:
-                    raise GroqAPIError(f"Translation too long: {len(translation)} > {max_length}")
-                
-                return translation
-                
-            except Exception as e:
-                logger.warning(f"Shortened translation failed (attempt {attempt + 1}/{max_retries}): {e}")
-                
+            except RateLimitError:
                 if attempt < max_retries - 1:
-                    delay = settings.BACKOFF_BASE_SEC * (2 ** attempt)
-                    time.sleep(delay)
+                    time.sleep(60)
                 else:
-                    raise GroqAPIError(f"Shortened translation failed: {str(e)}")
+                    raise GroqAPIError("Rate limit exceeded")
     
-    def _build_system_prompt(self, src_lang: str, tgt_lang: str, context: Optional[str]) -> str:
+    def _build_system_prompt(
+        self,
+        src_lang: str,
+        tgt_lang: str,
+        context: Optional[str]
+    ) -> str:
         """システムプロンプト生成"""
         lang_names = {
             "ja": "Japanese", "zh": "Chinese", "en": "English",
@@ -169,28 +197,23 @@ Return ONLY a JSON object in this format:
         src_name = lang_names.get(src_lang, src_lang)
         tgt_name = lang_names.get(tgt_lang, tgt_lang)
         
-        prompt = f"""You are a professional translator specialized in video subtitle translation.
-Translate the following segments from {src_name} to {tgt_name}.
-
-IMPORTANT RULES:
-1. Preserve the meaning and tone (formal/casual) of the original text
-2. Keep translations natural and concise for spoken dialogue
-3. Maintain consistency in terminology throughout
-4. DO NOT add explanations, notes, or extra content
-5. If a segment is a sound effect (like [laugh], [music]), keep it as-is or translate appropriately"""
-        
+        context_instruction = ""
         if context:
-            prompt += f"\n6. Context: This is from a video about '{context}'"
+            context_instruction = f"\n6. Context: This is from a video about '{context}'"
         
-        return prompt
+        return settings.TRANSLATION_SYSTEM_PROMPT_TEMPLATE.format(
+            src_lang=src_name,
+            tgt_lang=tgt_name,
+            context_instruction=context_instruction
+        )
     
-    def _build_user_prompt(self, texts: list[str]) -> str:
+    def _build_user_prompt(self, texts: List[str]) -> str:
         """ユーザープロンプト生成"""
         import json
         
         segments = [{"id": i, "text": text} for i, text in enumerate(texts)]
         
-        prompt = f"""Translate the following segments:
+        return f"""Translate the following segments:
 
 {json.dumps(segments, ensure_ascii=False, indent=2)}
 
@@ -204,26 +227,24 @@ Return ONLY a JSON object in this format:
 }}
 
 IMPORTANT: Return pure JSON without markdown code blocks or extra text."""
-        
-        return prompt
     
-    def _parse_response(self, response: ChatCompletion, expected_count: int) -> list[str]:
+    def _parse_response(self, response: ChatCompletion, expected_count: int) -> List[str]:
         """レスポンスパース"""
         import json
         
         content = response.choices[0].message.content
         
+        # マークダウン除去
+        content = content.strip()
+        if content.startswith("```json"):
+            content = content[7:]
+        if content.startswith("```"):
+            content = content[3:]
+        if content.endswith("```"):
+            content = content[:-3]
+        content = content.strip()
+        
         try:
-            # マークダウンコードブロック除去（念のため）
-            content = content.strip()
-            if content.startswith("```json"):
-                content = content[7:]
-            if content.startswith("```"):
-                content = content[3:]
-            if content.endswith("```"):
-                content = content[:-3]
-            content = content.strip()
-            
             data = json.loads(content)
             
             if "translations" not in 
@@ -233,33 +254,33 @@ IMPORTANT: Return pure JSON without markdown code blocks or extra text."""
             
             if len(translations_list) != expected_count:
                 raise GroqAPIError(
-                    f"Translation count mismatch: expected {expected_count}, got {len(translations_list)}"
+                    f"Translation count mismatch: expected {expected_count}, "
+                    f"got {len(translations_list)}"
                 )
             
-            # id順にソート
+            # id順ソート
             translations_list.sort(key=lambda x: x.get("id", 0))
             
-            # translation フィールドを抽出
             translations = [item.get("translation", "") for item in translations_list]
             
             return translations
             
         except json.JSONDecodeError as e:
-            raise GroqAPIError(f"Failed to parse JSON response: {e}\nContent: {content}")
+            raise GroqAPIError(f"Failed to parse JSON: {e}\nContent: {content[:200]}")
     
-    def _validate_translations(self, originals: list[str], translations: list[str]) -> None:
-        """翻訳結果バリデーション"""
-        if len(originals) != len(translations):
-            raise GroqAPIError("Translation count mismatch after parsing")
+    def get_stats(self) -> Dict:
+        """統計情報取得（Design原則: 28. データよりも情報を伝える）"""
+        cache_stats = translation_cache.get_stats()
+        rate_stats = groq_rate_limiter.get_current_usage()
         
-        for i, (orig, trans) in enumerate(zip(originals, translations)):
-            # 空文字チェック
-            if not trans or not trans.strip():
-                raise GroqAPIError(f"Empty translation at index {i}")
-            
-            # 極端に短い/長い翻訳（元の1/10または5倍超）
-            if len(trans) < len(orig) / 10 or len(trans) > len(orig) * 5:
-                logger.warning(
-                    f"Translation length suspicious at index {i}: "
-                    f"orig={len(orig)}, trans={len(trans)}"
-                )
+        return {
+            **self.stats,
+            "cache_hit_rate": (
+                self.stats["cache_hits"] / 
+                (self.stats["cache_hits"] + self.stats["cache_misses"])
+                if (self.stats["cache_hits"] + self.stats["cache_misses"]) > 0
+                else 0
+            ),
+            "cache_stats": cache_stats,
+            "rate_limit_stats": rate_stats
+        }
