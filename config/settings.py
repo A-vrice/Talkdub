@@ -112,6 +112,19 @@ class Settings(BaseSettings):
     SLACK_WEBHOOK_URL: str = os.getenv("SLACK_WEBHOOK_URL", "")
     ALERT_DISK_THRESHOLD_GB: float = 50.0
     ALERT_FAILURE_RATE_THRESHOLD: float = 0.3  # 30%
+
+    # Groq API設定
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MAX_RETRIES: int = 5
+    GROQ_TIMEOUT_SEC: int = 30
+
+    # 翻訳チャンク設定
+    CHUNK_CHAR_LIMIT_SRC: int = 2500  # 1チャンクあたり最大文字数
+    CHUNK_SEG_LIMIT: int = 40  # 1チャンクあたり最大セグメント数
+    MAX_RETRIES: int = 5
+    BACKOFF_BASE_SEC: float = 2.0
+
     
     class Config:
         env_file = ".env"
