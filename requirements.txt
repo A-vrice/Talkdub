@@ -1,0 +1,26 @@
+# 既存パッケージ
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+celery==5.3.6
+redis==5.0.1
+slowapi==0.1.9
+
+# メール送信
+resend==0.8.0
+
+# 音声処理
+yt-dlp==2024.1.0
+ffmpeg-python==0.2.0
+demucs==4.0.1
+whisperx==3.1.1
+torch==2.1.2
+torchaudio==2.1.2
+silero-vad==4.0.0
+
+# 翻訳
+groq==0.4.2  # 追加
+
+# ユーティリティ
+python-dotenv==1.0.0
