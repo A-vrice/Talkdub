@@ -1,117 +1,72 @@
 """
-メール通知サービス（Resend利用）
-Design原則: 12. ユーザーの記憶に頼らない - PINコードは送信
+メール通知サービス（完全非同期版）
+Design原則: 90. UIをロックしない
 """
 import resend
-import secrets
+import asyncio
 import logging
-from datetime import datetime, timedelta
 from typing import Optional
-from pathlib import Path
 
 from config.settings import settings
+from app.services.pin_manager import pin_manager
 
 logger = logging.getLogger(__name__)
 
 # Resend API Key設定
 resend.api_key = settings.RESEND_API_KEY
 
-class PINManager:
-    """PIN生成・検証管理"""
-    _pins = {}  # {job_id: {"pin": str, "expires": datetime, "attempts": int}}
-    
-    @classmethod
-    def generate_pin(cls, job_id: str) -> str:
-        """6桁PINコード生成（Design原則: 13. コンストレイント）"""
-        pin = ''.join([str(secrets.randbelow(10)) for _ in range(6)])
-        cls._pins[job_id] = {
-            "pin": pin,
-            "expires": datetime.utcnow() + timedelta(hours=72),
-            "attempts": 0
-        }
-        return pin
-    
-    @classmethod
-    def verify_pin(cls, job_id: str, pin: str) -> tuple[bool, str]:
-        """
-        PIN検証
-        Returns: (成功/失敗, エラーメッセージ)
-        Design原則: 15. エラーを回避する - 試行回数制限
-        """
-        if job_id not in cls._pins:
-            return False, "PINが見つかりません（メールを再確認してください）"
-        
-        pin_data = cls._pins[job_id]
-        
-        # 有効期限チェック
-        if datetime.utcnow() > pin_data["expires"]:
-            return False, "PINコードの有効期限が切れています"
-        
-        # 試行回数チェック（Design原則: 13. コンストレイント）
-        if pin_data["attempts"] >= 5:
-            return False, "試行回数上限に達しました（メールを再送信してください）"
-        
-        pin_data["attempts"] += 1
-        
-        if pin_data["pin"] == pin:
-            return True, ""
-        else:
-            remaining = 5 - pin_data["attempts"]
-            return False, f"PINコードが正しくありません（残り{remaining}回）"
-    
-    @classmethod
-    def cleanup_expired(cls):
-        """期限切れPINの削除（cronで定期実行）"""
-        now = datetime.utcnow()
-        expired = [
-            job_id for job_id, data in cls._pins.items()
-            if now > data["expires"]
-        ]
-        for job_id in expired:
-            del cls._pins[job_id]
-        return len(expired)
-
-
-async def send_job_created_email(job_id: str, email: str, video_url: str, src_lang: str, tgt_lang: str) -> bool:
-    """
-    ジョブ作成通知メール送信
-    Design原則: 32. 前提条件は先に提示する
-    """
-    pin = PINManager.generate_pin(job_id)
+async def send_job_created_email(
+    job_id: str, 
+    email: str, 
+    video_url: str, 
+    src_lang: str, 
+    tgt_lang: str
+) -> bool:
+    """ジョブ作成通知メール送信（非同期）"""
+    pin = pin_manager.generate_pin(job_id)
     
     try:
-        params = {
-            "from": "TalkDub <noreply@talkdub.lab>",
-            "to": [email],
-            "subject": "【TalkDub】処理を開始しました",
-            "html": render_job_created_html(job_id, pin, video_url, src_lang, tgt_lang)
-        }
+        # Resend APIは同期なので、別スレッドで実行
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: resend.Emails.send({
+                "from": settings.EMAIL_FROM,
+                "to": [email],
+                "subject": "【TalkDub】処理を開始しました",
+                "html": render_job_created_html(job_id, pin, video_url, src_lang, tgt_lang)
+            })
+        )
         
-        response = resend.Emails.send(params)
-        logger.info(f"Job created email sent: job_id={job_id}, email={email}, resend_id={response['id']}")
+        logger.info(f"Job created email sent: job_id={job_id}, resend_id={response['id']}")
         return True
         
     except Exception as e:
         logger.error(f"Failed to send job created email: {e}")
         return False
 
-
-async def send_job_completed_email(job_id: str, email: str, download_url: str, expires_at: str) -> bool:
-    """
-    処理完了通知メール送信
-    Design原則: 66. 操作の近くでフィードバック
-    """
-    pin = PINManager._pins.get(job_id, {}).get("pin", "N/A")
+async def send_job_completed_email(
+    job_id: str, 
+    email: str, 
+    download_url: str, 
+    expires_at: str
+) -> bool:
+    """処理完了通知メール送信（非同期）"""
+    pin_data = pin_manager.redis.hgetall(f"talkdub:pin:{job_id}")
+    pin = pin_data.get("pin", "N/A")
     
     try:
-        params = {
-            "from": "TalkDub <noreply@talkdub.lab>",
-            "to": [email],
-            "subject": "【TalkDub】処理が完了しました",
-            "html": render_job_completed_html(job_id, pin, download_url, expires_at)
-        }
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: resend.Emails.send({
+                "from": settings.EMAIL_FROM,
+                "to": [email],
+                "subject": "【TalkDub】処理が完了しました",
+                "html": render_job_completed_html(job_id, pin, download_url, expires_at)
+            })
+        )
         
-        response = resend.Emails.send(params)
         logger.info(f"Job completed email sent: job_id={job_id}, resend_id={response['id']}")
         return True
         
@@ -119,28 +74,30 @@ async def send_job_completed_email(job_id: str, email: str, download_url: str, e
         logger.error(f"Failed to send job completed email: {e}")
         return False
 
-
-async def send_job_failed_email(job_id: str, email: str, error_message: str) -> bool:
-    """
-    処理失敗通知メール送信
-    Design原則: 55. エラー表示は建設的にする
-    """
+async def send_job_failed_email(
+    job_id: str, 
+    email: str, 
+    error_message: str
+) -> bool:
+    """処理失敗通知メール送信（非同期）"""
     try:
-        params = {
-            "from": "TalkDub <noreply@talkdub.lab>",
-            "to": [email],
-            "subject": "【TalkDub】処理が失敗しました",
-            "html": render_job_failed_html(job_id, error_message)
-        }
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: resend.Emails.send({
+                "from": settings.EMAIL_FROM,
+                "to": [email],
+                "subject": "【TalkDub】処理が失敗しました",
+                "html": render_job_failed_html(job_id, error_message)
+            })
+        )
         
-        response = resend.Emails.send(params)
         logger.info(f"Job failed email sent: job_id={job_id}, resend_id={response['id']}")
         return True
         
     except Exception as e:
         logger.error(f"Failed to send job failed email: {e}")
         return False
-
 
 def render_job_created_html(job_id: str, pin: str, video_url: str, src_lang: str, tgt_lang: str) -> str:
     """
