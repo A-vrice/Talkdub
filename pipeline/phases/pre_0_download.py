@@ -1,36 +1,39 @@
 """
-Phase Pre-0: YouTube動画ダウンロード
-Design原則: 15. エラーを回避する
+Phase Pre-0: YouTube動画ダウンロード（リファクタ版）
+Design原則: 23. オブジェクトベース
 """
 import subprocess
-import logging
 from pathlib import Path
 
-from config.settings import settings
-from app.services.storage import load_job, save_job
+from pipeline.base_phase import BasePhase, PhaseResult, PhaseError
 from pipeline.utils.ffmpeg import get_audio_duration
+from config.settings import settings
 
-logger = logging.getLogger(__name__)
-
-def phase_download(job_id: str) -> None:
-    """
-    YouTube動画から音声を抽出してダウンロード
+class DownloadPhase(BasePhase):
     
-    成果物:
-    - temp/{job_id}/original.wav (元音声)
-    - job.json の media.duration_sec 更新
-    """
-    job = load_job(job_id)
-    video_url = job["source"]["url"]
+    def get_phase_name(self) -> str:
+        return "Pre-0: Download"
     
-    temp_dir = settings.TEMP_DIR / job_id
-    temp_dir.mkdir(parents=True, exist_ok=True)
+    def get_timeout(self) -> int:
+        return settings.TIMEOUT_DOWNLOAD
     
-    output_path = temp_dir / "original.wav"
+    def validate_inputs(self) -> None:
+        """入力検証: job.json の source.url が存在するか"""
+        from app.services.storage import load_job
+        job = load_job(self.job_id)
+        
+        if not job.get("source", {}).get("url"):
+            raise PhaseError("source.url が設定されていません")
     
-    try:
-        # yt-dlp でダウンロード + ffmpeg で wav変換
-        # Design原則: 29. 唯一の選択は自動化する
+    def execute(self) -> PhaseResult:
+        """YouTube動画ダウンロード実行"""
+        from app.services.storage import load_job
+        job = load_job(self.job_id)
+        video_url = job["source"]["url"]
+        
+        output_path = self.temp_dir / "original.wav"
+        
+        # yt-dlp実行
         cmd = [
             "yt-dlp",
             "--extract-audio",
@@ -42,30 +45,47 @@ def phase_download(job_id: str) -> None:
             video_url
         ]
         
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=1800  # 30分タイムアウト
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.get_timeout()
+            )
+            
+            if result.returncode != 0:
+                raise PhaseError(f"yt-dlp failed: {result.stderr}")
+            
+            # メタデータ取得
+            duration = get_audio_duration(output_path)
+            
+            return PhaseResult(
+                success=True,
+                output_files={"original": output_path},
+                metadata={"media": {"duration_sec": duration}}
+            )
+            
+        except subprocess.TimeoutExpired:
+            raise PhaseError("ダウンロードがタイムアウトしました（動画が長すぎる可能性）")
+    
+    def validate_outputs(self, result: PhaseResult) -> None:
+        """成果物検証"""
+        if "original" not in result.output_files:
+            raise PhaseError("original.wav が生成されていません")
         
-        if result.returncode != 0:
-            raise RuntimeError(f"yt-dlp failed: {result.stderr}")
+        original = result.output_files["original"]
+        if not original.exists():
+            raise PhaseError(f"ファイルが存在しません: {original}")
         
-        if not output_path.exists():
-            raise FileNotFoundError("Downloaded audio file not found")
-        
-        # メタデータ取得（動画尺）
-        duration = get_audio_duration(output_path)
-        
-        # job.json更新
-        job["media"]["duration_sec"] = duration
-        save_job(job)
-        
-        logger.info(f"Phase Pre-0 completed for job {job_id}, duration={duration:.2f}s")
-        
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("ダウンロードがタイムアウトしました（動画が長すぎる可能性があります）")
-    except Exception as e:
-        logger.error(f"Phase Pre-0 failed for job {job_id}: {e}")
-        raise
+        # ファイルサイズチェック（最低1MB）
+        if original.stat().st_size < 1024 * 1024:
+            raise PhaseError("ダウンロードされた音声ファイルが小さすぎます")
+
+# 関数形式のエントリーポイント（既存コードとの互換性）
+def phase_download(job_id: str) -> None:
+    """Phase Pre-0 実行（ラッパー）"""
+    phase = DownloadPhase(job_id)
+    result = phase.run()
+    
+    if not result.success:
+        raise PhaseError(result.error)
