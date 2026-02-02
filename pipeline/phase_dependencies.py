@@ -126,3 +126,12 @@ def validate_phase_preconditions(
             return False, f"環境変数 '{env_var}' が設定されていません（.envファイルを確認してください）"
     
     return True, None
+    
+# 翻訳Phase追加
+PHASE_DEPENDENCIES[PhaseID.TRANSLATION] = PhaseDependency(
+    phase_id=PhaseID.TRANSLATION,
+    required_files=[],
+    required_job_fields=["segments", "languages.src_lang", "languages.tgt_lang"],
+    required_env_vars=["GROQ_API_KEY"],
+    estimated_duration_min=20.0  # APIコール主体なので比較的速い
+)
