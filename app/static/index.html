@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MultiLang Voice Lab - 多言語音声変換</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <!-- Design原則: 1. シンプルにする -->
+</head>
+<body>
+    <div class="container">
+        <!-- Design原則: 85. 整然とレイアウト -->
+        <header>
+            <h1>MultiLang Voice Lab</h1>
+            <p class="subtitle">YouTube動画の多言語吹き替え（研究プロジェクト）</p>
+        </header>
+
+        <!-- Design原則: 61. 即座の喜びを与える -->
+        <main>
+            <section class="form-section">
+                <h2>動画を投稿</h2>
+                
+                <!-- Design原則: 40. ストーリー性を持たせる -->
+                <form id="submitForm" class="job-form">
+                    <!-- Design原則: 32. 前提条件は先に提示 -->
+                    <div class="notice">
+                        <strong>対応言語:</strong> 日本語、英語、中国語、ドイツ語、フランス語、イタリア語、スペイン語、ポルトガル語、ロシア語、韓国語
+                    </div>
+
+                    <!-- Design原則: 46. 入力欄を構造化 -->
+                    <div class="form-group">
+                        <label for="videoUrl">YouTube URL <span class="required">*</span></label>
+                        <input 
+                            type="url" 
+                            id="videoUrl" 
+                            name="video_url" 
+                            placeholder="https://www.youtube.com/watch?v=..." 
+                            required
+                            aria-describedby="urlHelp"
+                        >
+                        <small id="urlHelp">動画のURLを貼り付けてください</small>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="srcLang">元の言語 <span class="required">*</span></label>
+                            <!-- Design原則: 48. ラジオボタンは単数選択 -->
+                            <select id="srcLang" name="src_lang" required>
+                                <option value="">選択してください</option>
+                                <option value="ja">日本語</option>
+                                <option value="en">English</option>
+                                <option value="zh">中文</option>
+                                <option value="de">Deutsch</option>
+                                <option value="fr">Français</option>
+                                <option value="it">Italiano</option>
+                                <option value="es">Español</option>
+                                <option value="pt">Português</option>
+                                <option value="ru">Русский</option>
+                                <option value="ko">한국어</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="tgtLang">翻訳先の言語 <span class="required">*</span></label>
+                            <select id="tgtLang" name="tgt_lang" required>
+                                <option value="">選択してください</option>
+                                <option value="ja">日本語</option>
+                                <option value="en">English</option>
+                                <option value="zh">中文</option>
+                                <option value="de">Deutsch</option>
+                                <option value="fr">Français</option>
+                                <option value="it">Italiano</option>
+                                <option value="es">Español</option>
+                                <option value="pt">Português</option>
+                                <option value="ru">Русский</option>
+                                <option value="ko">한국어</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="email">メールアドレス <span class="required">*</span></label>
+                        <input 
+                            type="email" 
+                            id="email" 
+                            name="email" 
+                            placeholder="you@example.com" 
+                            required
+                            aria-describedby="emailHelp"
+                        >
+                        <small id="emailHelp">完了時に通知をお送りします</small>
+                    </div>
+
+                    <!-- Design原則: 47. デフォルトボタンには具体的な動詞 -->
+                    <button type="submit" class="btn-primary" id="submitBtn">
+                        処理を開始
+                    </button>
+
+                    <!-- Design原則: 55. エラー表示は建設的に -->
+                    <div id="errorMessage" class="error-message" role="alert" style="display:none;"></div>
+                </form>
+            </section>
+
+            <!-- Design原則: 59. ウェイファインディング -->
+            <section class="info-section">
+                <h3>処理時間の目安</h3>
+                <ul>
+                    <li>30分の動画: 約15〜20時間</li>
+                    <li>完了時にメールで通知します</li>
+                    <li>納品物は72時間で自動削除されます</li>
+                </ul>
+
+                <h3>注意事項</h3>
+                <ul>
+                    <li>口パク（リップシンク）には対応していません</li>
+                    <li>品質保証なし（研究プロジェクトのため）</li>
+                    <li>処理失敗の可能性があります</li>
+                </ul>
+
+                <!-- Design原則: 60. エスケープハッチ -->
+                <a href="/help" class="link">詳しいヘルプを見る</a>
+            </section>
+        </main>
+
+        <!-- Design原則: 63. 変化をアニメーションで表す -->
+        <div id="successModal" class="modal" style="display:none;">
+            <div class="modal-content">
+                <h2>投稿完了</h2>
+                <p>ジョブID: <strong id="modalJobId"></strong></p>
+                <p>処理完了時にメールで通知します。</p>
+                <a id="modalStatusLink" class="btn-secondary">ステータス確認</a>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
