@@ -45,8 +45,8 @@ def process_job_task(self, job_id: str):
         from pipeline.phases.pre_3_5_vad import VADPhase
         from pipeline.phases.pre_4_ref_audio import RefAudioPhase
         from pipeline.phases.pre_5_hallucination import HallucinationPhase
-        # from pipeline.phases.trans_groq import TranslationPhase  # 次回実装
-        # ... (TTS, Post処理は次回)
+        from pipeline.phases.trans_groq import TranslationPhase  # 追加
+        # from pipeline.phases.tts_qwen import TTSPhase  # 次回実装
         
         # パイプライン設定
         config = PipelineConfig(
@@ -58,8 +58,8 @@ def process_job_task(self, job_id: str):
                 VADPhase,
                 RefAudioPhase,
                 HallucinationPhase,
-                # TranslationPhase,  # 次回
-                # TTSPhase,
+                TranslationPhase,  # 追加
+                # TTSPhase,  # 次回
                 # ... (Post処理)
             ],
             stop_on_error=True
