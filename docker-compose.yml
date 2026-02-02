@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # Redis (Celery broker + PIN storage)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_/data
+    restart: unless-stopped
+
+  # TalkDub Web API
+  web:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./:/app
+      - .//app/data
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=false
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+      - SECRET_KEY=${SECRET_KEY}
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # Celery Worker
+  worker:
+    build: .
+    command: celery -A pipeline.worker worker --loglevel=info --concurrency=1
+    volumes:
+      - ./:/app
+      - .//app/data
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - HF_TOKEN=${HF_TOKEN}
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # Cloudflared Tunnel (追加仕様)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TOKEN}
+    environment:
+      - CLOUDFLARED_TOKEN=${CLOUDFLARED_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - web
+
+volumes:
+  redis_
