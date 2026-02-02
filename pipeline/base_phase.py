@@ -1,6 +1,5 @@
 """
-Phase処理基底クラス
-Design原則: 6. 一貫性 - 挙動のルールを統一
+Phase基底クラス v2（リファクタ版）
 """
 import logging
 import time
@@ -11,17 +10,19 @@ from typing import Optional, Any
 from contextlib import contextmanager
 
 from app.services.storage import load_job, save_job
+from pipeline.phase_dependencies import PhaseID, validate_phase_preconditions
+from pipeline.utils.logging_helper import StructuredLogger
+from pipeline.utils.error_translator import ErrorTranslator
 from config.settings import settings
-
-logger = logging.getLogger(__name__)
 
 @dataclass
 class PhaseResult:
-    """Phase処理結果（Design原則: 25. 状態を体現する）"""
+    """Phase処理結果"""
     success: bool
-    output_files: dict[str, Path]  # キー: 成果物名, 値: ファイルパス
-    meta dict[str, Any]  # job.json更新用メタデータ
+    output_files: dict[str, Path]
+    meta dict[str, Any]
     error: Optional[str] = None
+    user_friendly_error: Optional[str] = None  # 追加
     duration_sec: float = 0.0
 
 class PhaseError(Exception):
@@ -29,27 +30,24 @@ class PhaseError(Exception):
     pass
 
 class BasePhase(ABC):
-    """
-    Phase処理の抽象基底クラス
-    
-    全Phaseで共通のエラーハンドリング、ログ、リトライを提供
-    Design原則: 18. 複雑性をシステム側へ
-    """
+    """Phase処理の抽象基底クラス v2"""
     
     def __init__(self, job_id: str):
         self.job_id = job_id
-        self.logger = self._setup_logger()
         self.temp_dir = settings.TEMP_DIR / job_id
         self.temp_dir.mkdir(parents=True, exist_ok=True)
-    
-    def _setup_logger(self) -> logging.Logger:
-        """構造化ログの準備"""
-        phase_logger = logging.getLogger(f"{self.__class__.__name__}.{self.job_id}")
-        return phase_logger
+        
+        # 構造化ログ
+        self.logger = StructuredLogger(job_id, self.get_phase_name())
     
     @abstractmethod
     def get_phase_name(self) -> str:
-        """Phase名（例: "Pre-0: Download"）"""
+        """Phase名"""
+        pass
+    
+    @abstractmethod
+    def get_phase_id(self) -> PhaseID:
+        """Phase識別子"""
         pass
     
     @abstractmethod
@@ -59,39 +57,35 @@ class BasePhase(ABC):
     
     @abstractmethod
     def execute(self) -> PhaseResult:
-        """Phase処理本体（サブクラスで実装）"""
-        pass
-    
-    @abstractmethod
-    def validate_inputs(self) -> None:
-        """入力ファイル/データの検証（実行前）"""
-        pass
-    
-    @abstractmethod
-    def validate_outputs(self, result: PhaseResult) -> None:
-        """成果物の検証（実行後）"""
+        """Phase処理本体"""
         pass
     
     def run(self, max_retries: int = None) -> PhaseResult:
         """
-        Phase実行（リトライ・エラーハンドリング込み）
-        Design原則: 54. フェールセーフ - 取り消し可能性
+        Phase実行（事前検証 + リトライ + エラー翻訳）
         """
         max_retries = max_retries or settings.PHASE_MAX_RETRIES
         start_time = time.time()
         
-        self.logger.info(f"Starting {self.get_phase_name()} for job {self.job_id}")
+        self.logger.info(f"Starting {self.get_phase_name()}")
         
-        # 入力検証
-        try:
-            self.validate_inputs()
-        except Exception as e:
-            self.logger.error(f"Input validation failed: {e}")
+        # 事前検証（Design原則: 32. 前提条件は先に提示する）
+        job = load_job(self.job_id)
+        is_valid, error_msg = validate_phase_preconditions(
+            self.get_phase_id(),
+            self.job_id,
+            job,
+            self.temp_dir
+        )
+        
+        if not is_valid:
+            self.logger.error(f"Precondition validation failed: {error_msg}")
             return PhaseResult(
                 success=False,
                 output_files={},
                 metadata={},
-                error=f"入力検証失敗: {str(e)}"
+                error=error_msg,
+                user_friendly_error=error_msg  # 前提条件エラーは既にわかりやすい
             )
         
         # リトライループ
@@ -101,12 +95,10 @@ class BasePhase(ABC):
                 result = self.execute()
                 result.duration_sec = time.time() - start_time
                 
-                # 成果物検証
-                self.validate_outputs(result)
-                
                 self.logger.info(
-                    f"{self.get_phase_name()} completed successfully "
-                    f"(attempt {attempt + 1}/{max_retries}, duration={result.duration_sec:.2f}s)"
+                    f"Completed successfully",
+                    attempt=attempt + 1,
+                    duration_sec=round(result.duration_sec, 2)
                 )
                 
                 # job.json更新
@@ -117,21 +109,33 @@ class BasePhase(ABC):
             except Exception as e:
                 last_error = e
                 self.logger.warning(
-                    f"{self.get_phase_name()} failed (attempt {attempt + 1}/{max_retries}): {e}"
+                    f"Failed",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    error=str(e)
                 )
                 
                 if attempt < max_retries - 1:
-                    delay = settings.PHASE_RETRY_DELAY_SEC * (2 ** attempt)  # 指数バックオフ
-                    self.logger.info(f"Retrying in {delay}s...")
+                    delay = settings.PHASE_RETRY_DELAY_SEC * (2 ** attempt)
+                    self.logger.info(f"Retrying in {delay}s")
                     time.sleep(delay)
         
         # 全リトライ失敗
-        self.logger.error(f"{self.get_phase_name()} failed after {max_retries} attempts")
+        technical_error = str(last_error)
+        user_error = ErrorTranslator.translate(technical_error)
+        
+        self.logger.error(
+            f"Failed after {max_retries} attempts",
+            technical_error=technical_error,
+            user_error=user_error
+        )
+        
         return PhaseResult(
             success=False,
             output_files={},
             metadata={},
-            error=f"最大リトライ回数超過: {str(last_error)}",
+            error=technical_error,
+            user_friendly_error=user_error,
             duration_sec=time.time() - start_time
         )
     
@@ -142,7 +146,6 @@ class BasePhase(ABC):
         
         job = load_job(self.job_id)
         
-        # メタデータをマージ（深いマージ）
         for key, value in result.metadata.items():
             if isinstance(value, dict) and key in job and isinstance(job[key], dict):
                 job[key].update(value)
@@ -153,11 +156,11 @@ class BasePhase(ABC):
     
     @contextmanager
     def temporary_file(self, suffix: str = ".tmp"):
-        """一時ファイルのコンテキストマネージャ（自動削除）"""
+        """一時ファイルのコンテキストマネージャ"""
         temp_path = self.temp_dir / f"{self.get_phase_name().replace(':', '_')}_{suffix}"
         try:
             yield temp_path
         finally:
             if temp_path.exists():
                 temp_path.unlink()
-                self.logger.debug(f"Cleaned up temporary file: {temp_path}")
+                self.logger.debug(f"Cleaned up temporary file: {temp_path.name}")
