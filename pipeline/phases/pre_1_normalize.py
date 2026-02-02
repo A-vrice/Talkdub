@@ -1,33 +1,32 @@
 """
-Phase Pre-1: 音声正規化
-Design原則: 14. プリコンピュテーション - 最適値のプリセット
+Phase Pre-1: 音声正規化（リファクタ版）
 """
 import subprocess
-import logging
 from pathlib import Path
 
+from pipeline.base_phase import BasePhase, PhaseResult, PhaseError
 from config.settings import settings
-from app.services.storage import load_job
 
-logger = logging.getLogger(__name__)
-
-def phase_normalize(job_id: str) -> None:
-    """
-    音声を16kHz mono, -23 LUFS に正規化
+class NormalizePhase(BasePhase):
     
-    入力: temp/{job_id}/original.wav
-    成果物: temp/{job_id}/normalized.wav
-    """
-    temp_dir = settings.TEMP_DIR / job_id
-    input_path = temp_dir / "original.wav"
-    output_path = temp_dir / "normalized.wav"
+    def get_phase_name(self) -> str:
+        return "Pre-1: Normalize"
     
-    if not input_path.exists():
-        raise FileNotFoundError("original.wav not found")
+    def get_timeout(self) -> int:
+        return settings.TIMEOUT_NORMALIZE
     
-    try:
+    def validate_inputs(self) -> None:
+        """入力検証: original.wav が存在するか"""
+        input_path = self.temp_dir / "original.wav"
+        if not input_path.exists():
+            raise PhaseError("original.wav が見つかりません")
+    
+    def execute(self) -> PhaseResult:
+        """音声正規化実行"""
+        input_path = self.temp_dir / "original.wav"
+        output_path = self.temp_dir / "normalized.wav"
+        
         # ffmpeg で正規化
-        # Design原則: 42. よいデフォルト（-23 LUFS は業界標準）
         cmd = [
             "ffmpeg", "-i", str(input_path),
             "-af", "loudnorm=I=-23:TP=-2:LRA=7,aresample=16000",
@@ -37,26 +36,43 @@ def phase_normalize(job_id: str) -> None:
             str(output_path)
         ]
         
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=3600
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.get_timeout()
+            )
+            
+            if result.returncode != 0:
+                raise PhaseError(f"ffmpeg normalization failed: {result.stderr}")
+            
+            # 元ファイル削除（ディスク節約）
+            input_path.unlink()
+            self.logger.debug("Deleted original.wav to save disk space")
+            
+            return PhaseResult(
+                success=True,
+                output_files={"normalized": output_path},
+                metadata={}
+            )
+            
+        except subprocess.TimeoutExpired:
+            raise PhaseError("正規化がタイムアウトしました")
+    
+    def validate_outputs(self, result: PhaseResult) -> None:
+        """成果物検証"""
+        if "normalized" not in result.output_files:
+            raise PhaseError("normalized.wav が生成されていません")
         
-        if result.returncode != 0:
-            raise RuntimeError(f"ffmpeg normalization failed: {result.stderr}")
-        
-        if not output_path.exists():
-            raise FileNotFoundError("Normalized audio not created")
-        
-        logger.info(f"Phase Pre-1 completed for job {job_id}")
-        
-        # original.wav削除（ディスク節約）
-        input_path.unlink()
-        
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("正規化がタイムアウトしました")
-    except Exception as e:
-        logger.error(f"Phase Pre-1 failed for job {job_id}: {e}")
-        raise
+        normalized = result.output_files["normalized"]
+        if not normalized.exists():
+            raise PhaseError(f"ファイルが存在しません: {normalized}")
+
+def phase_normalize(job_id: str) -> None:
+    """Phase Pre-1 実行"""
+    phase = NormalizePhase(job_id)
+    result = phase.run()
+    
+    if not result.success:
+        raise PhaseError(result.error)
