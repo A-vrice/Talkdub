@@ -83,6 +83,20 @@ PHASE_DEPENDENCIES = {
         required_env_vars=[],
         estimated_duration_min=2.0
     ),
+    PhaseID.TRANSLATION: PhaseDependency(
+    phase_id=PhaseID.TRANSLATION,
+    required_files=[],
+    required_job_fields=["segments", "languages.src_lang", "languages.tgt_lang"],
+    required_env_vars=["GROQ_API_KEY"],
+    estimated_duration_min=20.0  # APIコール主体なので比較的速い
+    ),
+    PhaseID.TTS: PhaseDependency(
+    phase_id=PhaseID.TTS,
+    required_files=["pre_voice.wav"],  # タイミング測定用
+    required_job_fields=["segments", "speakers", "languages.tgt_lang"],
+    required_env_vars=["HF_TOKEN"],  # Qwen3-TTSモデルダウンロード用
+    estimated_duration_min=180.0  # 3時間（CPU処理、100セグメント想定）
+    ),
 }
 
 def get_dependency(phase_id: PhaseID) -> PhaseDependency:
@@ -127,19 +141,3 @@ def validate_phase_preconditions(
     
     return True, None
     
-# 翻訳Phase追加
-PHASE_DEPENDENCIES[PhaseID.TRANSLATION] = PhaseDependency(
-    phase_id=PhaseID.TRANSLATION,
-    required_files=[],
-    required_job_fields=["segments", "languages.src_lang", "languages.tgt_lang"],
-    required_env_vars=["GROQ_API_KEY"],
-    estimated_duration_min=20.0  # APIコール主体なので比較的速い
-)
-# TTS Phase追加
-PHASE_DEPENDENCIES[PhaseID.TTS] = PhaseDependency(
-    phase_id=PhaseID.TTS,
-    required_files=["pre_voice.wav"],  # タイミング測定用
-    required_job_fields=["segments", "speakers", "languages.tgt_lang"],
-    required_env_vars=["HF_TOKEN"],  # Qwen3-TTSモデルダウンロード用
-    estimated_duration_min=180.0  # 3時間（CPU処理、100セグメント想定）
-)
