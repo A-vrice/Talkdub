@@ -1,6 +1,5 @@
 """
-Phase Translation: Groq API翻訳
-Design原則: 20. メジャーなタスクに最適化する
+Phase Translation v2（リファクタ版）
 """
 from pipeline.base_phase import BasePhase, PhaseResult, PhaseError
 from pipeline.phase_dependencies import PhaseID
@@ -10,12 +9,7 @@ from app.services.storage import load_job
 from config.settings import settings
 
 class TranslationPhase(BasePhase):
-    """
-    Groq APIでセグメント一括翻訳
-    
-    入力: segments[], languages
-    成果物: segments[].tgt_text 更新
-    """
+    """Groq APIでセグメント一括翻訳 v2"""
     
     def get_phase_name(self) -> str:
         return "Translation"
@@ -24,11 +18,11 @@ class TranslationPhase(BasePhase):
         return PhaseID.TRANSLATION
     
     def get_timeout(self) -> int:
-        # チャンク数 × 30秒（API呼び出し想定）
         job = load_job(self.job_id)
         segments = job.get("segments", [])
         chunks = SegmentChunker.chunk_segments(segments)
-        return max(1800, len(chunks) * 30)
+        # チャンク数 × 45秒（API呼び出し + レート制限待機）
+        return max(1800, len(chunks) * 45)
     
     def execute(self) -> PhaseResult:
         """翻訳実行"""
@@ -44,7 +38,7 @@ class TranslationPhase(BasePhase):
         ]
         
         if not translatable_segments:
-            self.logger.warning("No segments to translate (all flagged as hallucination)")
+            self.logger.warning("No segments to translate (all flagged)")
             return PhaseResult(
                 success=True,
                 output_files={},
@@ -60,7 +54,7 @@ class TranslationPhase(BasePhase):
             total_chunks = len(chunks)
             
             self.logger.info(
-                f"Starting translation",
+                "Starting translation",
                 src_lang=src_lang,
                 tgt_lang=tgt_lang,
                 total_segments=len(translatable_segments),
@@ -68,13 +62,19 @@ class TranslationPhase(BasePhase):
             )
             
             # チャンクごとに翻訳
+            failed_chunks = 0
+            
             for i, chunk in enumerate(chunks, 1):
-                self.logger.progress(i, total_chunks, f"Translating chunk {i}/{total_chunks}")
+                # セグメント単位の進捗
+                completed_segs = sum(len(chunks[j]) for j in range(i - 1))
+                self.logger.progress(
+                    completed_segs,
+                    len(translatable_segments),
+                    f"Chunk {i}/{total_chunks}"
+                )
                 
-                # このチャンクのテキストを抽出
                 texts = [seg["src_text"] for seg in chunk]
                 
-                # Groq API呼び出し
                 try:
                     translations = groq.translate(
                         texts=texts,
@@ -92,27 +92,38 @@ class TranslationPhase(BasePhase):
                 except GroqAPIError as e:
                     self.logger.error(f"Translation failed for chunk {i}: {e}")
                     
+                    failed_chunks += 1
+                    
                     # このチャンクのセグメントを失敗マーク
                     for seg in chunk:
                         seg["translation"]["status"] = "failed"
                         seg["translation"]["retries"] += 1
+                        # フォールバック：元テキストを暫定的に設定
+                        seg["tgt_text"] = seg["src_text"]
                     
-                    # Design原則: 56. 可能性と確率を区別する
-                    # 一部失敗は許容して継続
-                    if i == total_chunks:  # 最後のチャンクでも失敗したら例外
-                        raise PhaseError(f"Translation failed on final chunk: {str(e)}")
+                    # 失敗率が50%超えたら中断
+                    if failed_chunks / total_chunks > 0.5:
+                        raise PhaseError(
+                            f"Translation failure rate too high: "
+                            f"{failed_chunks}/{total_chunks} chunks failed"
+                        )
             
-            # 統計情報
-            completed_count = sum(
-                1 for seg in segments
-                if seg["translation"]["status"] == "completed"
-            )
-            
+            # 統計情報ログ
+            stats = groq.get_stats()
             self.logger.info(
-                f"Translation completed",
-                completed_segments=completed_count,
-                total_segments=len(segments),
-                success_rate=round(completed_count / len(segments) * 100, 1)
+                "Translation completed",
+                completed_segments=sum(
+                    1 for seg in segments
+                    if seg["translation"]["status"] == "completed"
+                ),
+                failed_segments=sum(
+                    1 for seg in segments
+                    if seg["translation"]["status"] == "failed"
+                ),
+                api_requests=stats["total_requests"],
+                cache_hit_rate=round(stats["cache_hit_rate"] * 100, 1),
+                total_tokens=stats["total_tokens"],
+                estimated_cost_usd=round(stats["total_cost_usd"], 4)
             )
             
             return PhaseResult(
