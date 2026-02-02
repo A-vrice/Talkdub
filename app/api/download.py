@@ -1,8 +1,8 @@
 """
-納品物ダウンロードAPI
-Design原則: 54. フェールセーフ - 取り消し可能性を重視
+納品物ダウンロードAPI（PIN認証追加）
+Design原則: 13. コンストレイント - 制約で誤操作を防ぐ
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Header
 from fastapi.responses import FileResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -13,20 +13,29 @@ import json
 
 from config.settings import settings
 from app.services.storage import load_job, save_job
+from app.services.notification import PINManager
 
 router = APIRouter()
 limiter = Limiter(key_func=get_remote_address)
 
 @router.get("/jobs/{job_id}/download")
 @limiter.limit(f"{settings.RATE_LIMIT_DOWNLOADS_PER_MINUTE}/minute")
-async def download_job(request: Request, job_id: str):
+async def download_job(
+    request: Request, 
+    job_id: str,
+    x_pin: str = Header(..., alias="X-PIN")  # Design原則: 13. コンストレイント
+):
     """
-    納品物ダウンロード
-    Design原則: 57. 黙って実行する - 不要な確認を増やさない
+    納品物ダウンロード（PIN認証必須）
     """
     job_path = settings.JOBS_DIR / f"{job_id}.json"
     if not job_path.exists():
         raise HTTPException(status_code=404, detail="ジョブが見つかりません")
+    
+    # PIN検証（Design原則: 15. エラーを回避する）
+    is_valid, error_msg = PINManager.verify_pin(job_id, x_pin)
+    if not is_valid:
+        raise HTTPException(status_code=403, detail=error_msg)
     
     job = load_job(job_id)
     
@@ -37,7 +46,7 @@ async def download_job(request: Request, job_id: str):
             detail=f"ダウンロード不可: ステータスが '{job['status']}' です"
         )
     
-    # 期限確認（Design原則: 59. ウェイファインディング）
+    # 期限確認
     if job.get("expires_at"):
         expires = datetime.fromisoformat(job["expires_at"].replace("Z", "+00:00"))
         if datetime.utcnow() > expires:
@@ -46,7 +55,7 @@ async def download_job(request: Request, job_id: str):
                 detail="納品物は保持期限切れで削除されました"
             )
     
-    # ダウンロード回数チェック（帯域幅保護）
+    # ダウンロード回数チェック
     if job.get("download_count", 0) >= 5:
         raise HTTPException(
             status_code=429,
@@ -64,14 +73,14 @@ async def download_job(request: Request, job_id: str):
     zip_path = settings.TEMP_DIR / f"dub_{job_id}.zip"
     create_delivery_zip(output_dir, zip_path, job)
     
-    # ダウンロード回数を更新（Design原則: 25. 状態を体現する）
+    # ダウンロード回数を更新
     job["download_count"] = job.get("download_count", 0) + 1
     save_job(job)
     
     return FileResponse(
         path=zip_path,
         media_type="application/zip",
-        filename=f"dub_{job['languages']['tgt_lang']}.zip",
+        filename=f"talkdub_{job['languages']['tgt_lang']}.zip",
         headers={
             "X-Download-Count": str(job["download_count"]),
             "X-Expires-At": job.get("expires_at", "")
@@ -79,7 +88,7 @@ async def download_job(request: Request, job_id: str):
     )
 
 def create_delivery_zip(output_dir: Path, zip_path: Path, job: dict):
-    """納品ZIPファイル作成（Design原則: 18. 複雑性をシステム側へ）"""
+    """納品ZIPファイル作成"""
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         # dub_*.wav
         dub_wav = output_dir / f"dub_{job['languages']['tgt_lang']}.wav"
@@ -96,7 +105,7 @@ def create_delivery_zip(output_dir: Path, zip_path: Path, job: dict):
         if segments.exists():
             zf.write(segments, segments.name)
         
-        # UPLOAD_GUIDE.txt（Design原則: 12. 記憶に頼らない）
+        # UPLOAD_GUIDE.txt
         guide_text = generate_upload_guide(job)
         zf.writestr("UPLOAD_GUIDE.txt", guide_text)
         
@@ -132,12 +141,15 @@ URL: {job['source']['url']}
 - すでに自動吹替（auto dub）がある場合は、先にそれを削除してください
 - 音声トラックは動画と同じ長さに調整済みです
 - アップロード後、反映まで数分かかる場合があります
+
+---
+TalkDub - 多言語音声変換プラットフォーム
 """
 
 def generate_readme(job: dict) -> str:
     """納品物説明"""
     return f"""
-# MultiLang Voice Lab 納品物
+# TalkDub 納品物
 
 ## ジョブ情報
 - ジョブID: {job['job_id']}
@@ -154,10 +166,15 @@ def generate_readme(job: dict) -> str:
 ## 注意事項
 - 本ファイルは72時間で削除されます
 - 品質保証なし（研究プロジェクトのため）
+- 口パク（リップシンク）には対応していません
 - 問題があればフィードバックをお願いします
 
 ## 技術詳細
 - ASR: WhisperX
 - TTS: Qwen3-TTS 1.7B
 - 処理サーバー: CPU専用（非GPU）
+- 翻訳: Groq API
+
+---
+TalkDub - https://talkdub.lab
 """
