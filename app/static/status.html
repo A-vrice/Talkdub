@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>処理状況 - Talkdub</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>処理状況</h1>
+            <!-- Design原則: 59. ウェイファインディング -->
+            <p class="subtitle"><a href="/">← トップへ戻る</a></p>
+        </header>
+
+        <main>
+            <section class="form-section">
+                <!-- Design原則: 25. オブジェクトは自身の状態を体現 -->
+                <div id="statusContainer">
+                    <div class="status-header">
+                        <h2>ジョブID: <span id="jobId"></span></h2>
+                        <span id="statusBadge" class="status-badge"></span>
+                    </div>
+
+                    <!-- Design原則: 65. 進捗などで補う -->
+                    <div class="progress-bar">
+                        <div id="progressFill" class="progress-fill"></div>
+                    </div>
+                    <p id="progressText" class="progress-text"></p>
+
+                    <div class="status-details">
+                        <p><strong>現在のフェーズ:</strong> <span id="currentPhase">-</span></p>
+                        <p><strong>作成日時:</strong> <span id="createdAt">-</span></p>
+                        <p><strong>完了予定:</strong> <span id="eta">-</span></p>
+                    </div>
+
+                    <!-- Design原則: 47. 具体的な動詞を用いる -->
+                    <div id="downloadSection" style="display:none;">
+                        <button id="downloadBtn" class="btn-primary">
+                            納品物をダウンロード
+                        </button>
+                        <p class="notice" style="margin-top:1rem;">
+                            ダウンロードにはPINコードが必要です（メールで送信済み）
+                        </p>
+                    </div>
+
+                    <div id="errorSection" style="display:none;">
+                        <div class="error-message">
+                            <strong>エラー:</strong> <span id="errorText"></span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- PIN入力モーダル -->
+    <div id="pinModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h2>PIN認証</h2>
+            <p>メールで送信された6桁のPINコードを入力してください</p>
+            
+            <!-- Design原則: 46. 入力欄を構造化 -->
+            <div class="pin-input">
+                <input type="text" class="pin-digit" maxlength="1" pattern="[0-9]" inputmode="numeric">
+                <input type="text" class="pin-digit" maxlength="1" pattern="[0-9]" inputmode="numeric">
+                <input type="text" class="pin-digit" maxlength="1" pattern="[0-9]" inputmode="numeric">
+                <input type="text" class="pin-digit" maxlength="1" pattern="[0-9]" inputmode="numeric">
+                <input type="text" class="pin-digit" maxlength="1" pattern="[0-9]" inputmode="numeric">
+                <input type="text" class="pin-digit" maxlength="1" pattern="[0-9]" inputmode="numeric">
+            </div>
+
+            <button id="pinSubmitBtn" class="btn-primary">確認</button>
+            <button id="pinCancelBtn" class="btn-secondary" style="margin-top:0.5rem;">キャンセル</button>
+            
+            <div id="pinError" class="error-message" style="display:none;"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/status.js"></script>
+</body>
+</html>
