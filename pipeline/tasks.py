@@ -33,27 +33,34 @@ class JobTask(Task):
 
 @celery_app.task(base=JobTask, bind=True)
 def process_job_task(self, job_id: str):
-    """
-    メインジョブ処理タスク（リファクタ版）
-    Design原則: 83. 単純なものは単純なままに
-    """
+    """メインジョブ処理タスク"""
     logger.info(f"Starting job {job_id}")
     
     try:
-        # Phase定義（動的インポートで循環依存回避）
+        # Phase定義
         from pipeline.phases.pre_0_download import DownloadPhase
         from pipeline.phases.pre_1_normalize import NormalizePhase
-        # from pipeline.phases.pre_2_separate import SeparatePhase
-        # ... (以下Phase追加時にインポート)
+        from pipeline.phases.pre_2_separate import SeparatePhase
+        from pipeline.phases.pre_3_whisperx import WhisperXPhase
+        from pipeline.phases.pre_3_5_vad import VADPhase
+        from pipeline.phases.pre_4_ref_audio import RefAudioPhase
+        from pipeline.phases.pre_5_hallucination import HallucinationPhase
+        # from pipeline.phases.trans_groq import TranslationPhase  # 次回実装
+        # ... (TTS, Post処理は次回)
         
         # パイプライン設定
         config = PipelineConfig(
             phases=[
                 DownloadPhase,
                 NormalizePhase,
-                # SeparatePhase,
-                # WhisperXPhase,
-                # ... (Phase追加)
+                SeparatePhase,
+                WhisperXPhase,
+                VADPhase,
+                RefAudioPhase,
+                HallucinationPhase,
+                # TranslationPhase,  # 次回
+                # TTSPhase,
+                # ... (Post処理)
             ],
             stop_on_error=True
         )
