@@ -17,7 +17,9 @@ PHASES = {
         ("JSON Schema", "✅", "job.json, translation_patch.json"),
         ("ストレージ管理", "✅", "app/services/storage.py, atomic write"),
         ("バリデーション", "✅", "app/utils/validation.py"),
-        ("ログ管理", "✅", "構造化ログ、contextual logging"),
+        ("ログ管理", "✅", "構造化ログ、StructuredLogger"),
+        ("Phase依存定義", "✅", "phase_dependencies.py, 事前検証"),
+        ("エラー翻訳", "✅", "error_translator.py, ユーザーフレンドリー化"),
     ],
     "Web UI/API": [
         ("FastAPI本体", "✅", "app/main.py, セキュリティヘッダー"),
