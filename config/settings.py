@@ -143,7 +143,17 @@ IMPORTANT RULES:
     # 翻訳キャッシュ設定
     TRANSLATION_CACHE_ENABLED: bool = True
     TRANSLATION_CACHE_TTL_HOURS: int = 72  # 72時間キャッシュ保持
-    
+
+    # TTS設定
+    TTS_MODEL_NAME: str = "Qwen/Qwen3-TTS-1.7B"
+    TTS_SAMPLE_RATE: int = 24000
+    TTS_DEVICE: str = "cpu"  # v0.1ではCPU専用
+    TIMEOUT_TTS_PER_SEGMENT: int = 300  # 5分/セグメント
+
+    # TTS品質検証
+    TTS_MIN_RMS_THRESHOLD: float = 0.001  # 無音検出閾値
+    TTS_MAX_CLIPPING_RATIO: float = 0.01  # クリッピング許容率
+
     class Config:
         env_file = ".env"
         case_sensitive = True
