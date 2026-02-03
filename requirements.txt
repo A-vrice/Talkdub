@@ -23,4 +23,4 @@ silero-vad==4.0.0
 groq==0.37.1  # 追加
 
 # ユーティリティ
-python-dotenv==1.0.0
+python-dotenv==1.2.1
