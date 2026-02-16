@@ -8,7 +8,7 @@ redis==5.0.1
 slowapi==0.1.9
 
 # メール送信
-resend==0.8.0
+resend==2.22.0
 
 # 音声処理
 yt-dlp==2024.1.0
