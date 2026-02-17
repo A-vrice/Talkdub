@@ -16,7 +16,7 @@ ffmpeg-python==0.2.0
 demucs==4.0.1
 whisperx==3.1.1
 torch==2.8.0
-torchaudio==2.1.2
+torchaudio==2.10.0
 silero-vad==6.2.0
 
 # 翻訳
