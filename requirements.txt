@@ -5,7 +5,7 @@ pydantic==2.12.5
 pydantic-settings==2.12.0
 celery==5.6.2
 redis==5.3.1
-slowapi==0.1.9
+slowapi==0.1.10
 
 # メール送信
 resend==0.8.0
