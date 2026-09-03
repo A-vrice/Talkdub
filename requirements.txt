@@ -20,7 +20,7 @@ torchaudio==2.1.2
 silero-vad==6.2.0
 
 # 翻訳
-groq==1.0.0  # 追加
+groq==1.7.0  # 追加
 
 # ユーティリティ
 python-dotenv==1.2.1
