@@ -13,7 +13,7 @@ resend==0.8.0
 # 音声処理
 yt-dlp==2024.1.0
 ffmpeg-python==0.2.0
-demucs==4.0.1
+demucs==4.1.0
 whisperx==3.1.1
 torch==2.8.0
 torchaudio==2.1.2
